@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import subprocess
 import os
+import sys
 import threading
 import time
 from datetime import datetime
@@ -10,30 +11,62 @@ import logging
 app = Flask(__name__)
 CORS(app)
 
-# Log ayarları
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Process'leri saklayacağımız yer
 processes = {}
 
 @app.route('/')
 def home():
     return render_template('index.html')
 
+def install_bot_requirements(bot_name):
+    """Botun özel requirements'ini yükle"""
+    requirements_file = f"uploads/{bot_name.replace('.py', '_requirements.txt')}"
+    
+    if os.path.exists(requirements_file):
+        try:
+            log_message(f"{bot_name} için requirements yükleniyor: {requirements_file}")
+            
+            # Pip install işlemi
+            result = subprocess.run([
+                sys.executable, "-m", "pip", "install", "-r", requirements_file
+            ], capture_output=True, text=True, timeout=300)
+            
+            if result.returncode == 0:
+                log_message(f"{bot_name} requirements başarıyla yüklendi")
+                return True
+            else:
+                log_message(f"Requirements yükleme hatası: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            log_message(f"Requirements yükleme timeout: {bot_name}")
+            return False
+        except Exception as e:
+            log_message(f"Requirements yükleme hatası: {str(e)}")
+            return False
+    else:
+        log_message(f"{bot_name} için requirements dosyası bulunamadı: {requirements_file}")
+        return True  # Requirements dosyası yoksa devam et
+
 @app.route('/api/bots')
 def list_bots():
     bot_list = []
     
-    # Uploads klasöründeki tüm .py dosyalarını bul
     if os.path.exists('uploads'):
         for file in os.listdir('uploads'):
             if file.endswith('.py'):
                 status = "running" if file in processes and processes[file].poll() is None else "stopped"
                 
+                # Requirements dosyası var mı kontrol et
+                requirements_file = f"uploads/{file.replace('.py', '_requirements.txt')}"
+                has_requirements = os.path.exists(requirements_file)
+                
                 bot_list.append({
                     "name": file,
                     "status": status,
+                    "has_requirements": has_requirements,
                     "file_path": f"uploads/{file}"
                 })
     
@@ -48,12 +81,17 @@ def run_bot():
     if not os.path.exists(bot_path):
         return jsonify({"error": "Bot dosyası bulunamadı"}), 404
     
-    # Eğer zaten çalışıyorsa durdur
     if bot_name in processes and processes[bot_name].poll() is None:
         return jsonify({"error": "Bot zaten çalışıyor"}), 400
     
     try:
-        # Botu subprocess olarak çalıştır
+        # Önce requirements'leri yükle
+        requirements_ok = install_bot_requirements(bot_name)
+        
+        if not requirements_ok:
+            return jsonify({"error": "Requirements yükleme başarısız"}), 500
+        
+        # Botu çalıştır
         process = subprocess.Popen(
             ['python', bot_path],
             stdout=subprocess.PIPE,
@@ -66,10 +104,13 @@ def run_bot():
         processes[bot_name] = process
         log_message(f"{bot_name} çalıştırıldı (PID: {process.pid})")
         
-        # Output'u oku ve logla
         threading.Thread(target=read_output, args=(process, bot_name), daemon=True).start()
         
-        return jsonify({"status": "success", "message": f"{bot_name} çalıştırıldı"})
+        return jsonify({
+            "status": "success", 
+            "message": f"{bot_name} çalıştırıldı",
+            "has_requirements": requirements_ok
+        })
     
     except Exception as e:
         log_message(f"{bot_name} çalıştırılırken hata: {str(e)}")
@@ -95,24 +136,6 @@ def stop_bot():
     else:
         return jsonify({"error": "Bot çalışmıyor"}), 400
 
-@app.route('/api/logs/<bot_name>')
-def get_bot_logs(bot_name):
-    log_file = f"logs/{bot_name}.log"
-    if os.path.exists(log_file):
-        with open(log_file, 'r', encoding='utf-8') as f:
-            return f.read()
-    else:
-        return "Henüz log yok"
-
-@app.route('/api/logs/system')
-def get_system_logs():
-    log_file = "logs/system.log"
-    if os.path.exists(log_file):
-        with open(log_file, 'r', encoding='utf-8') as f:
-            return f.read()
-    else:
-        return "Henüz sistem logu yok"
-
 @app.route('/api/upload', methods=['POST'])
 def upload_bot():
     if 'file' not in request.files:
@@ -122,15 +145,14 @@ def upload_bot():
     if file.filename == '':
         return jsonify({"error": "Dosya seçilmedi"}), 400
     
-    if file and file.filename.endswith('.py'):
-        # Uploads klasörüne kaydet
+    if file and (file.filename.endswith('.py') or file.filename.endswith('_requirements.txt')):
         os.makedirs('uploads', exist_ok=True)
         file.save(f"uploads/{file.filename}")
         
         log_message(f"{file.filename} yüklendi")
         return jsonify({"status": "success", "message": f"{file.filename} yüklendi"})
     else:
-        return jsonify({"error": "Sadece .py dosyaları yüklenebilir"}), 400
+        return jsonify({"error": "Sadece .py ve _requirements.txt dosyaları yüklenebilir"}), 400
 
 def read_output(process, bot_name):
     """Process output'unu oku ve logla"""
@@ -156,7 +178,6 @@ def log_message(message):
         f.write(f"[{timestamp}] {message}\n")
 
 if __name__ == '__main__':
-    # Gerekli klasörleri oluştur
     os.makedirs('uploads', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
     os.makedirs('templates', exist_ok=True)
