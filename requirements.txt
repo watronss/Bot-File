@@ -1,28 +1,3 @@
-# Telegram Botları için
-python-telegram-bot==20.7
-telethon==1.28.5
-pyrogram==2.0.106
-tgcrypto==1.2.5
-
-# Web ve HTTP
-requests==2.31.0
-aiohttp==3.8.5
-httpx==0.24.1
-beautifulsoup4==4.12.2
-
-# Veri İşleme
-pandas==2.1.4
-openpyxl==3.1.2
-
-# Database (Opsiyonel)
-sqlalchemy==2.0.23
-psycopg2-binary==2.9.9
-
-# Utility
-python-dotenv==1.0.0
-colorama==0.4.6
-pyyaml==6.0.1
-
-# Flask (Panel için)
 flask==2.3.3
 flask-cors==4.0.0
+python-dotenv==1.0.0
